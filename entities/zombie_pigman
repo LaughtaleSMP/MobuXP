@@ -1,0 +1,11 @@
+{
+  "format_version": "1.26.0",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "minecraft:zombie_pigman",
+      "is_spawnable": false,
+      "is_summonable": true,
+      "spawn_category": "monster"
+    }
+  }
+}
