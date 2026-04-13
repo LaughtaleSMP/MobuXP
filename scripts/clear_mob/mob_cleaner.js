@@ -18,8 +18,6 @@ const MOB_GROUPS = {
 const GROUP_NAMES = Object.keys(MOB_GROUPS)
 const MOB_IDS = Object.values(MOB_GROUPS).flat()
 
-// FIX #6: Tambah opsi "Off (Manual saja)" di index 0
-// Saat interval = 0 → tidak ada auto-clean, hanya manual dari menu.
 const INTERVAL_TICKS  = [0,   100,      200,       400,       600,       1200,     2400,      6000,      12000     ]
 const INTERVAL_LABELS = ['Off (Manual saja)', '5 detik','10 detik','20 detik','30 detik','1 menit','2 menit','5 menit','10 menit']
 
@@ -54,9 +52,6 @@ function saveTime() {
 
 function restoreTick() {
   try {
-    // FIX #1: Jangan restore tick saat cleaner disabled.
-    // Sebelumnya: tick loncat ke nilai besar → begitu re-enable langsung trigger clean.
-    // Sekarang  : saat disabled, tick dimulai dari 0 ketika re-enable.
     if (!cfg.enabled || cfg.interval === 0) { saveTime(); return }
     const last = world.getDynamicProperty(`${NS}:lastClean`)
     if (typeof last === 'number') {
@@ -96,11 +91,6 @@ function isAdmin(player) {
 }
 
 // -- Core --
-// FIX #4: Gunakan getEntities({ type }) per mob ID, bukan getEntities() lalu filter manual.
-// FIX #7: Skip mob yang sedang dalam combat (ada player dalam radius 10 blok).
-//         Mob yang aktif diserang tiba-tiba hilang → janky & player rugi streak/loot.
-
-// FIX #7: Cek apakah mob sedang aktif diserang/dekat player
 function isMobInCombat(e) {
   try {
     return e.dimension.getPlayers({ location: e.location, maxDistance: 10 }).length > 0
@@ -122,7 +112,6 @@ function cleanMobs() {
         try {
           for (const e of dimension.getEntities({ type: targetId })) {
             try {
-              // FIX #7: Lewati mob yang sedang dalam radius player (aktif combat)
               if (!isValid(e) || e.nameTag?.trim() || isMobInCombat(e)) continue
               e.remove()
               killed[e.typeId] = (killed[e.typeId] ?? 0) + 1
@@ -141,13 +130,8 @@ function cleanMobs() {
 }
 
 // -- Interval loop --
-// FIX #6: Timer PAUSE saat cleaner dimatikan (cfg.enabled = false).
-//         Timer juga tidak jalan saat interval = 0 (manual-only mode).
 system.runInterval(() => {
-  // Pause saat disabled — timer tidak bergerak
   if (!cfg.enabled) return
-
-  // Manual-only mode — tidak ada auto-clean
   if (cfg.interval === 0) return
 
   tick += 20
@@ -167,15 +151,10 @@ system.runInterval(() => {
     playSoundAll('note.pling', 1, 1.2)
   }
 
-  // FIX #3: Gunakan shared actionbar manager dengan priority 10
-  // (lebih tinggi dari kill notification priority 5)
   if (hasTargets && remaining <= ACTIONBAR_SHOW_TICKS) {
     const bar = '§6Mob Cleaner ' + buildBar(remaining) + ' §e' + formatSecs(remaining)
-
-    // setBarAll di shared manager — hanya berjalan kalau ada data
     setBarAll(bar, 10, 40)
 
-    // Suara countdown
     for (const p of world.getPlayers()) {
       try {
         if (remaining <= 20) p.playSound('note.pling', { location: p.location, volume: 0.8, pitch: 2.0 })
@@ -224,7 +203,6 @@ async function openMobMenu(player) {
 
 async function openIntervalConfig(player) {
   const form = new ModalFormData().title('Mob Cleaner — Interval')
-  // FIX #6: Tampilkan semua opsi termasuk "Off (Manual saja)" di index 0
   safeDropdown(form, 'Interval Pembersihan', INTERVAL_LABELS, Math.max(0, INTERVAL_TICKS.indexOf(cfg.interval)))
 
   const res = await form.show(player)
@@ -236,7 +214,6 @@ async function openIntervalConfig(player) {
 async function openMainMenu(player) {
   try { player.playSound('random.orb', { location: player.location, volume: 1, pitch: 1.5 }) } catch {}
 
-  // FIX #6: Tampilkan info interval "Off" jika interval = 0
   const intervalLabel = cfg.interval === 0
     ? 'Off (Manual saja)'
     : INTERVAL_LABELS[Math.max(0, INTERVAL_TICKS.indexOf(cfg.interval))]
@@ -256,15 +233,11 @@ async function openMainMenu(player) {
   if (res.selection === 0) {
     const wasEnabled = cfg.enabled
     cfg.enabled = !cfg.enabled
-
-    // FIX #6: Reset timer saat re-enable agar countdown mulai segar
-    // Saat dimatikan → timer sudah pause, tidak perlu reset
     if (!wasEnabled && cfg.enabled) {
       resetFlags()
       saveTime()
       console.warn('[MCleaner] Cleaner diaktifkan kembali — timer reset.')
     }
-
     saveConfig()
     return openMainMenu(player)
   }
@@ -272,7 +245,6 @@ async function openMainMenu(player) {
   if (res.selection === 1) return openMobMenu(player)
   if (res.selection === 2) return openIntervalConfig(player)
 
-  // Bersihkan Sekarang (manual)
   const count = cleanMobs()
   resetFlags(); saveTime()
   broadcast('§6[Mob Cleaner] §eDibersihkan §f' + count + ' §emob.')
@@ -280,27 +252,25 @@ async function openMainMenu(player) {
   openMainMenu(player)
 }
 
-// -- Trigger: Klik kanan stick --
-world.afterEvents.itemUse.subscribe(ev => {
+// -- Trigger: Klik kanan stick (beforeEvents) --
+world.beforeEvents.itemUse.subscribe(ev => {
   try {
     const player = ev.source
+    console.warn('[MCleaner] itemUse fired — item: ' + ev.itemStack?.typeId + ' | player: ' + player?.name)
     if (!player || ev.itemStack?.typeId !== TRIGGER_ITEM) return
+    if (!isAdmin(player)) return
 
-    // FIX #2: Key pakai player.name (bukan player.id) agar bisa dibersihkan
-    // di playerLeave yang hanya punya playerName, bukan playerId.
     const now = Date.now()
     const lastOpen = menuCooldown.get(player.name) ?? 0
     if (now - lastOpen < 1000) return
     menuCooldown.set(player.name, now)
-
-    if (!isAdmin(player)) return
 
     console.warn('[MCleaner] Menu dibuka oleh: ' + player.name)
     system.runTimeout(() => openMainMenu(player).catch(e => console.warn('[MCleaner] UI: ' + e)), 1)
   } catch (e) { console.warn('[MCleaner] itemUse error: ' + e) }
 })
 
-// FIX #2: Bersihkan menuCooldown saat player disconnect — cegah memory leak.
+// -- Cleanup saat disconnect --
 world.afterEvents.playerLeave.subscribe(ev => {
   try { menuCooldown.delete(ev.playerName) } catch {}
 })
