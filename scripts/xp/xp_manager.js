@@ -42,7 +42,7 @@ const CONFIG_DEFAULTS = {
   bonus_sound_pitch:        1.0,
   bonus_sound_volume:       0.6,
 
-  max_orb_per_spawn:        60, // legacy — dipertahankan
+  max_orb_per_spawn:        60,
 
   coin_scoreboard:          "coin",
   coin_per_kill:             1,
@@ -56,6 +56,7 @@ const CONFIG_DEFAULTS = {
   mob_stack_radius:           8,
   mob_stack_warn:          true,
   mob_stack_cooldown_ticks:  10,
+  mob_stack_coin_penalty:    10, // koin dikurangi per mob excess
 
   whitelist: new Set([
     "minecraft:zombie",
@@ -100,6 +101,7 @@ const CONFIG = { ...CONFIG_DEFAULTS, ..._RAW_CONFIG };
     "streak_max_bonus_chance",
     "mob_stack_limit",
     "mob_stack_radius",
+    "mob_stack_coin_penalty",
   ];
 
   const missing = required.filter(
@@ -145,8 +147,6 @@ function distSq(a, b) {
 // ============================================================
 // KILL STREAK
 // FIX #9: Timeout streak pakai Date.now() (real-time ms), bukan tick.
-// system.runTimeout(fn, ticks) bergantung TPS — saat server lag,
-// 8 detik game tick bisa jadi 20+ detik real time, tidak fair untuk player.
 // ============================================================
 const streakMap = new Map(); // playerName -> { count, expireMs }
 
@@ -154,7 +154,6 @@ function incrementStreak(playerName) {
   const now     = Date.now();
   const existing = streakMap.get(playerName);
 
-  // Anggap streak expired jika sudah melewati waktu nyata
   const isExpired = !existing || now >= existing.expireMs;
   const newCount  = isExpired ? 1 : existing.count + 1;
 
@@ -166,8 +165,6 @@ function incrementStreak(playerName) {
   return newCount;
 }
 
-// Bersihkan streak yang expired secara periodik (tiap ~5 detik)
-// agar map tidak terus bertumbuh tanpa batas.
 system.runInterval(() => {
   const now = Date.now();
   for (const [name, data] of streakMap) {
@@ -201,22 +198,16 @@ function canPlayEffect(playerName) {
 
 // ============================================================
 // FIX #1: BERI XP LANGSUNG KE PLAYER
-// Sebelumnya: spawn xp_orb entity (tidak memberi XP di Bedrock)
-// Sekarang  : player.addExperience() → XP benar-benar masuk
 // ============================================================
 function giveXP(player, amount) {
   const rounded = Math.max(1, Math.round(amount));
   try {
     player.addExperience(rounded);
   } catch {
-    // Fallback ke command jika API tidak tersedia
     player.runCommand(`xp ${rounded}`);
   }
 }
 
-// ============================================================
-// HELPER: Suara kill biasa
-// ============================================================
 function playKillSound(player) {
   player.runCommand(
     `playsound ${CONFIG.kill_sound} @s ~ ~ ~ ` +
@@ -226,11 +217,8 @@ function playKillSound(player) {
 
 // ============================================================
 // HELPER: Beri koin ke player via scoreboard
-// FIX #6: Validasi isFinite() sebelum kirim command.
-// Sebelumnya: coin_per_kill + undefined = NaN → command error runtime.
 // ============================================================
 function giveCoins(player, amount) {
-  // Tolak NaN, Infinity, negatif, atau non-number dari config yang salah isi
   if (!Number.isFinite(amount) || amount <= 0) {
     if (amount !== 0) {
       console.warn(`[XP Manager] giveCoins dilewati: amount tidak valid → ${amount}`);
@@ -252,7 +240,20 @@ function giveCoins(player, amount) {
   );
 }
 
-// FIX #6: Validasi return value agar NaN tidak merambat ke giveCoins.
+// ============================================================
+// HELPER: Kurangi koin dari player (punishment anti-stack)
+// ============================================================
+function takeCoins(player, amount) {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+
+  const scoreboard = CONFIG.coin_scoreboard;
+  if (typeof scoreboard !== "string" || scoreboard.trim() === "") return;
+
+  player.runCommand(
+    `scoreboard players remove @s ${scoreboard} ${Math.floor(amount)}`
+  );
+}
+
 function coinBonusForTier(tierLabel) {
   const map = {
     "Lucky":   CONFIG.coin_bonus_lucky,
@@ -261,7 +262,6 @@ function coinBonusForTier(tierLabel) {
     "Jackpot": CONFIG.coin_bonus_jackpot,
   };
   const val = map[tierLabel];
-  // Jika config diisi string/undefined, kembalikan 0 bukan NaN
   return Number.isFinite(val) ? val : 0;
 }
 
@@ -274,7 +274,7 @@ function buildActionbarMsg(streak, bonusTier, coinGiven) {
 
   if (bonusTier) {
     const tierColor = tierLabelColor(bonusTier.label);
-    const bonusPart = `${tierColor}✦ ${bonusTier.label}! §f+${bonusTier.xp} XP`;
+    const bonusPart = `${tierColor}❆ ${bonusTier.label}! §f+${bonusTier.xp} XP`;
     return `${killPart} §7|  ${bonusPart}${coinPart}`;
   }
 
@@ -330,18 +330,13 @@ function broadcastMilestone(playerName, streak) {
 }
 
 // ============================================================
-// FIX #7: ANTI MOB-STACKING
+// ANTI MOB-STACKING
 // Cek kepadatan mob di area kill. Jika melebihi batas,
-// hapus excess mob dan optionally warn player.
+// hapus excess mob dan kurangi koin player sebagai punishment.
 //
-// FIX #3: Boss mob (Wither, Ender Dragon, dll) menggunakan remove()
-// bukan kill() — kill() pada boss memicu death event yang spawn drop
-// dan XP gratis tanpa player yang benar-benar membunuhnya.
-//
-// Cooldown per-player agar cek tidak terlalu sering.
+// Rumus penalty: removed * mob_stack_coin_penalty
+// Contoh: 5 mob excess, penalty 10 koin/mob = -50 koin
 // ============================================================
-
-// Boss yang harus di-remove(), bukan kill()
 const BOSS_IDS = new Set([
   "minecraft:wither",
   "minecraft:ender_dragon",
@@ -355,14 +350,12 @@ function checkAndCleanStack(player, dimension, pos) {
   const limit = CONFIG.mob_stack_limit;
   if (!limit || limit <= 0) return;
 
-  // Cooldown: jangan cek terlalu sering per player
   const now = system.currentTick;
   const last = stackCheckCooldown.get(player.name) ?? -CONFIG.mob_stack_cooldown_ticks;
   if (now - last < CONFIG.mob_stack_cooldown_ticks) return;
   stackCheckCooldown.set(player.name, now);
 
   try {
-    // Ambil semua entity di radius, filter yang masuk whitelist
     const nearby = dimension
       .getEntities({ location: pos, maxDistance: CONFIG.mob_stack_radius })
       .filter(e => {
@@ -380,7 +373,6 @@ function checkAndCleanStack(player, dimension, pos) {
     for (const mob of excess) {
       try {
         if (typeof mob.isValid === "function" && !mob.isValid()) continue;
-        // FIX #3: Boss pakai remove() → tidak trigger death event / drop / XP
         if (BOSS_IDS.has(mob.typeId)) {
           mob.remove();
         } else {
@@ -397,7 +389,29 @@ function checkAndCleanStack(player, dimension, pos) {
         `— Player: ${player.name}`
       );
 
-      if (CONFIG.mob_stack_warn) {
+      // ============================================================
+      // PUNISHMENT: Kurangi koin player per mob excess yang dihapus
+      // ============================================================
+      const penalty = CONFIG.mob_stack_coin_penalty;
+      const totalPenalty = removed * penalty;
+
+      if (Number.isFinite(penalty) && penalty > 0) {
+        takeCoins(player, totalPenalty);
+
+        // Peringatan dengan info penalty
+        if (CONFIG.mob_stack_warn) {
+          player.sendMessage(
+            `§7[§cAnti-Stack§7] §f${removed} §emob excess dihapus! ` +
+            `§cPenalty: -${totalPenalty} koin §7(${removed} mob x ${penalty} koin/mob)§7.`
+          );
+        }
+
+        console.warn(
+          `[XP Manager] Anti-Stack Penalty: ${player.name} kehilangan ${totalPenalty} koin ` +
+          `(${removed} mob x ${penalty}/mob)`
+        );
+      } else if (CONFIG.mob_stack_warn) {
+        // Penalty dinonaktifkan (= 0), cukup kirim peringatan biasa
         player.sendMessage(
           `§7[§cAnti-Stack§7] §f${removed} §emob excess dihapus di areamu untuk mencegah lag server.`
         );
@@ -413,8 +427,6 @@ function checkAndCleanStack(player, dimension, pos) {
 // ============================================================
 world.afterEvents.playerLeave.subscribe((event) => {
   const name = event.playerName;
-
-  // FIX #9: streakMap tidak lagi menyimpan timeoutHandle, cukup delete entry
   streakMap.delete(name);
   effectCooldownMap.delete(name);
   stackCheckCooldown.delete(name);
@@ -423,10 +435,6 @@ world.afterEvents.playerLeave.subscribe((event) => {
 
 // ============================================================
 // FIX #2: RESOLVE KILLER PLAYER
-// Perbaikan projectile attribution:
-// - Hanya 1 player di radius → aman diattribute
-// - Lebih dari 1 → ambil yang paling dekat dengan kalkulasi
-//   distSq yang akurat (bukan hanya closest:1 dari API)
 // ============================================================
 const PROJECTILE_CAUSES = new Set(["projectile", "magic", "sonicboom", "thorns"]);
 
@@ -434,12 +442,10 @@ function resolveKillerPlayer(event, pos, dimension) {
   const src    = event.damageSource;
   const dmgEnt = src?.damagingEntity;
 
-  // Melee langsung oleh player
   if (dmgEnt?.typeId === "minecraft:player") {
     return dmgEnt;
   }
 
-  // Projectile / magic — cari player terdekat di radius wajar
   if (src?.cause && PROJECTILE_CAUSES.has(src.cause)) {
     let candidates;
     try {
@@ -451,7 +457,6 @@ function resolveKillerPlayer(event, pos, dimension) {
     if (candidates.length === 0) return null;
     if (candidates.length === 1) return candidates[0];
 
-    // Lebih dari 1 player — pilih yang paling dekat ke titik kill
     return candidates.reduce((closest, p) => {
       return distSq(p.location, pos) < distSq(closest.location, pos) ? p : closest;
     });
@@ -486,12 +491,11 @@ world.afterEvents.entityDie.subscribe((event) => {
 
     const playerName = player.name;
 
-    // FIX #1: XP langsung ke player, bukan spawn orb
     giveXP(player, finalXP);
     playKillSound(player);
     giveCoins(player, CONFIG.coin_per_kill);
 
-    // FIX #7: Cek dan bersihkan mob stacking
+    // Cek dan bersihkan mob stacking (+ terapkan penalty koin)
     checkAndCleanStack(player, dimension, pos);
 
     const streak      = incrementStreak(playerName);
@@ -509,12 +513,10 @@ world.afterEvents.entityDie.subscribe((event) => {
       const coinBonus = coinBonusForTier(tier.label);
       const coinTotal = CONFIG.coin_per_kill + coinBonus;
 
-      // Bonus XP langsung ke player + efek visual
       giveXP(player, tier.xp);
       playGildedDropEffect(player, dimension, pos);
       giveCoins(player, coinBonus);
 
-      // FIX #3: Gunakan shared actionbar manager (priority 5)
       setBar(player, buildActionbarMsg(streak, tier, coinTotal), 5, 60);
 
       console.log(
@@ -527,7 +529,6 @@ world.afterEvents.entityDie.subscribe((event) => {
         ` | Player: ${playerName}`
       );
     } else {
-      // FIX #3: Gunakan shared actionbar manager (priority 5)
       setBar(player, buildActionbarMsg(streak, null, CONFIG.coin_per_kill), 5, 60);
 
       console.log(
@@ -547,7 +548,7 @@ console.log(
   ` | Multiplier: ${CONFIG.xp_multiplier_percent}%` +
   ` | Tier: ${CONFIG.bonus_tiers.map(t => `${t.label}(${t.xp}xp)`).join(", ")}` +
   ` | Max Chance: ${CONFIG.streak_max_bonus_chance}%` +
-  ` | Anti-Stack: limit=${CONFIG.mob_stack_limit} radius=${CONFIG.mob_stack_radius}blok` +
+  ` | Anti-Stack: limit=${CONFIG.mob_stack_limit} radius=${CONFIG.mob_stack_radius}blok penalty=${CONFIG.mob_stack_coin_penalty}koin/mob` +
   ` | Koin/Kill: ${CONFIG.coin_per_kill}` +
   ` | Whitelist: ${WHITELIST.size} mob`
 );
