@@ -83,19 +83,25 @@ export const CONFIG = {
   // Mencegah player sengaja numpuk mob untuk farming XP / kill
   // streak yang bikin server lag.
   //
-  // mob_stack_limit  : jumlah maksimal mob (dari whitelist) yang
-  //                    boleh ada di radius mob_stack_radius blok
-  //                    dari titik kill. Excess langsung dihapus.
-  // mob_stack_radius : radius pengecekan (blok).
-  // mob_stack_warn   : kirim pesan ke player saat excess dihapus.
+  // mob_stack_limit       : jumlah maksimal mob (dari whitelist) yang
+  //                         boleh ada di radius mob_stack_radius blok
+  //                         dari titik kill. Excess langsung dihapus.
+  // mob_stack_radius      : radius pengecekan (blok).
+  // mob_stack_warn        : kirim pesan ke player saat excess dihapus.
   // mob_stack_cooldown_ticks : jeda antar pengecekan per-player
   //                            (hindari cek tiap kill di area
   //                            yang sama secara berlebihan).
+  //
+  // mob_stack_coin_penalty : jumlah koin yang DIKURANGI dari player
+  //                          per mob excess yang dihapus.
+  //                          Set ke 0 untuk menonaktifkan punishment.
+  //                          Contoh: 5 → tiap 1 mob excess = -5 koin.
   // ============================================================
-  mob_stack_limit:           20,
-  mob_stack_radius:           8,
-  mob_stack_warn:          true,
-  mob_stack_cooldown_ticks:  10,
+  mob_stack_limit:            20,
+  mob_stack_radius:            8,
+  mob_stack_warn:           true,
+  mob_stack_cooldown_ticks:   10,
+  mob_stack_coin_penalty:     10,
 
   // ============================================================
   // WHITELIST MOB
