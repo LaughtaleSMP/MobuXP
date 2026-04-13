@@ -7,7 +7,7 @@ const NS = 'mcleaner'
 const ADMIN_TAG = 'mimi'
 const TRIGGER_ITEM = 'minecraft:stick'
 const DIMENSIONS = ['minecraft:overworld', 'minecraft:nether', 'minecraft:the_end']
-const BAR_LEN = 10, MS_PER_TICK = 50, ACTIONBAR_SHOW_TICKS = 100, WARN_THRESHOLD = 0.10, WARN_1MIN_TICKS = 1200
+const BAR_LEN = 5, MS_PER_TICK = 50, ACTIONBAR_SHOW_TICKS = 100, WARN_THRESHOLD = 0.10, WARN_1MIN_TICKS = 1200
 
 const MOB_GROUPS = {
   Undead:  ['minecraft:zombie','minecraft:zombie_villager','minecraft:husk','minecraft:drowned','minecraft:zoglin','minecraft:skeleton','minecraft:stray','minecraft:bogged','minecraft:phantom'],
