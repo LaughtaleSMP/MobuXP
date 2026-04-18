@@ -30,7 +30,7 @@ export const CONFIG = {
 
   streak_timeout_seconds: 8,
 
-  streak_milestones: [5, 10, 20, 30, 50],
+  streak_milestones: [50],
 
   streak_milestone_messages: {
     5:  "§7[§aStreak§7] §f{player} §e{streak} kill streak! ",
