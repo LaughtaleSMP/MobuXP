@@ -256,9 +256,9 @@ async function openMainMenu(player) {
 world.beforeEvents.itemUse.subscribe(ev => {
   try {
     const player = ev.source
-    console.warn('[MCleaner] itemUse fired — item: ' + ev.itemStack?.typeId + ' | player: ' + player?.name)
     if (!player || ev.itemStack?.typeId !== TRIGGER_ITEM) return
     if (!isAdmin(player)) return
+    console.warn('[MCleaner] itemUse fired — item: ' + ev.itemStack?.typeId + ' | player: ' + player?.name)
 
     const now = Date.now()
     const lastOpen = menuCooldown.get(player.name) ?? 0
