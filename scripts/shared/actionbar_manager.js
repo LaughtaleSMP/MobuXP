@@ -13,16 +13,14 @@ import { world, system } from "@minecraft/server";
 // name -> { msg, priority, expireTick }
 const _bars = new Map();
 
-// Interval hanya berjalan saat ada data.
-// FIX #4: Build Map<name, Player> sekali per tick → O(n+m) bukan O(n*m).
-// Sebelumnya: world.getPlayers().find() dipanggil untuk setiap entry di _bars.
-// Sekarang  : satu iterasi getPlayers() per interval run, lookup O(1).
+// Interval 4 tick (~5 update/detik) — hemat TPS vs 2 tick sebelumnya,
+// masih cukup smooth untuk actionbar experience.
+// Build Map<name, Player> sekali per tick → O(n+m) bukan O(n*m).
 system.runInterval(() => {
   if (_bars.size === 0) return;
 
   const now = system.currentTick;
 
-  // Build player lookup map sekali — tidak di-loop ulang per entry
   const playerMap = new Map();
   for (const p of world.getPlayers()) playerMap.set(p.name, p);
 
@@ -37,7 +35,7 @@ system.runInterval(() => {
       player.onScreenDisplay.setActionBar(data.msg);
     } catch { /* player invalid / offline */ }
   }
-}, 2);
+}, 4); // ← naik dari 2 ke 4: hemat ~50% call overhead interval ini
 
 /**
  * Set actionbar untuk satu player.
@@ -52,7 +50,6 @@ export function setBar(player, msg, priority = 5, ticks = 60) {
   const name = typeof player === "string" ? player : player.name;
   const cur  = _bars.get(name);
 
-  // Jangan override pesan yang lebih prioritas dan masih aktif
   if (cur && cur.priority > priority && system.currentTick < cur.expireTick) return;
 
   _bars.set(name, { msg, priority, expireTick: system.currentTick + ticks });
